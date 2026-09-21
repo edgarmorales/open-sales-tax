@@ -6034,9 +6034,9 @@ DOR_GRID: list[tuple[str, str, str, str, str, str, str]] = [
         "Okeechobee",
         "34972",
         "0001",
-        "7.500",
+        "7.000",
         "0.05",
-        "iter-142 audit pin: SalesTaxHandbook (state 6 + Okeechobee 1.5; was 1.0, +0.5 school added)",
+        "FL DOR DR-15DSS CY2026 R.11/25 (state 6% + Okeechobee 1% small county surtax, eff Oct 1 1995, no expiration). daily-audit 2026-09 bumped 7.500->7.000: the iter-142 pin cited SalesTaxHandbook and asserted a school capital outlay surtax absent from the DOR table. FAILS under -m liveapi until prod reloads FL",
     ),
     (
         "FL",

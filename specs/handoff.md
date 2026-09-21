@@ -272,6 +272,67 @@ If Eric wants none of the above, ask before pivoting.
 
 ### Open follow-ups from daily state-tax audits
 
+- **FL — 3 LIVE OVER-COLLECTIONS: Okeechobee fixed in repo this run, Palm Beach
+  + Collier were fixed 78 days ago and never deployed; DE fully clean (audit
+  2026-09-21, day-5 rotation: DE + FL).**
+  - **FL audited by diffing all 67 counties** against the parsed CY2026
+    DR-15DSS rather than spot-checking pinned ZIPs. 66 exact, **1 wrong**.
+  - **Okeechobee County 1.500 -> 1.000 (fixed in repo, not deployed).** `34972`
+    returns **7.500%**, should be **7.000%** — **over-collects 0.5pp**. The DOR
+    row is `Okeechobee 1% Oct 1, 1995  None` in **both** the CY2026 and CY2025
+    tables: one small county surtax, no expiration, **no school capital outlay
+    component**. iter-142 raised it 1.0 -> 1.5 citing **SalesTaxHandbook** and
+    asserting a surtax the county has never levied — so this was never a late
+    rate change, it was wrong the day it landed. **Same aggregator pattern as
+    the five AZ over-collections.** Pin bumped 7.500 -> 7.000; fails under
+    `-m liveapi` until prod reloads FL.
+  - **Palm Beach `33401`/`33432` return 7.000%, should be 6.500%; Collier
+    `34102` returns 7.000%, should be 6.000%.** Both were **already corrected
+    in the repo on 2026-07-05 (commit `32a61f6`)**. Prod's FL rates are
+    `data_versions.id=496`, **fetched 2026-05-11** — predating the fix. Per the
+    CY2026 DR-15DSS, Palm Beach's 1% infrastructure surtax was **repealed eff
+    12/31/2025** and replaced by a **0.5% school surtax eff 1/1/2026**; Collier
+    is **"None"**. **No code change is possible — the fix is the reload.**
+    Palm Beach is Florida's third-most-populous county; largest exposure here.
+  - **One `data load -s FL` lands all three.** Chipped.
+  - **⚠️ Source-URL trap, now in the `fl_data.py` docstring:**
+    `.../Forms_library/current/dr15dss.pdf` **still serves CY2025 (R. 11/24)**;
+    the live CY2026 table is the year-suffixed
+    **`.../current/dr15dss_26.pdf`** (R. 11/25). Established by downloading and
+    diffing both. An audit trusting the unsuffixed path reports "clean" while
+    Palm Beach, Martin and Jackson are all wrong. (`dr15dss_27.pdf` 404s.)
+  - **🔔 Brevard and Charlotte both expire 12/31/2026.** If neither renews they
+    drop to **0.0%** (combined 6.0%) on 2027-01-01. **Brevard covers the Palm
+    Bay `32905` tier-1 pin.** The CY2027 DR-15DSS normally posts in November —
+    **the 2026-11-05 day-5 run must check it.**
+  - **The `DOR_GRID` offline check was run ad hoc against FL** — the CI-time
+    test the 2026-09-05 AZ audit called the project's highest-value follow-up.
+    All **29** FL pins evaluated against the module with no network and no
+    prod: **0 contradictions, no duplicate ZIPs** after the Okeechobee fix. FL
+    is internally coherent, but **the committed CI-time version is still
+    owed** and remains the top follow-up.
+  - **Not fixed, recorded:** ZCTA `34974` is Okeechobee city's main ZIP but
+    binds to **Glades County** (the ZCTA spans 5 counties; area-majority picks
+    rural Glades over populated Okeechobee). **Rate-neutral** — both are 1.0% —
+    so only the returned county *name* is wrong. Hand-pinning it would paper
+    over the area-majority rule; see
+    `specs/findings/multi-county-zip-fips-first-tiebreak-2026-08.md`.
+  - **DE fully clean.** No state or local sales tax (Delaware levies a **gross
+    receipts tax on the seller** instead, 0.0945–2.4218%). Engine returns
+    **0.000%** with zero jurisdictions at 19801/19901/19702/19958; the single
+    DE pin passes. No 2026 sales tax legislation pending.
+  - **⚠️ pip-audit is failing on pre-existing dependency advisories** (unrelated
+    to this change, and **not run by CI**): `anyio 4.14.0` — CVE-2026-63374,
+    CVE-2026-64847, CVE-2026-63349, all fixed in **4.14.2**; `pip 26.1.2` —
+    PYSEC-2026-3721, fixed in **26.2**. `anyio` is transitive (FastAPI /
+    starlette). Chipped rather than bundled into a rate fix.
+  - **⚠️ Rotation is not keeping up: the audit has run on 5 of the 46 days
+    since 2026-08-06.** Days 4 and 6–21 of the September cycle are all owed.
+    The gap pattern looks like **missed cron fires** (the Claude Code app must
+    be open when the task fires), not skipped work — **needs a decision from
+    Eric.**
+  - Full report: `specs/audits/2026/09/state-audit-2026-09-21.md`.
+
 - **✅ RESOLVED 2026-09-05 — AZ deployed + AR refreshed; both states now correct
   on the live engine.** Eric released the deploy and refresh chips the same day
   the audit ran, so nothing below is still live-wrong.

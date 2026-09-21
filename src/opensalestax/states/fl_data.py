@@ -11,13 +11,32 @@ FL DOR and posted at:
 
 Cross-checked against the FL DOR Tax Information Publication (TIP)
 series for any county-rate changes after the annual DR-15DSS issue.
+
+.. warning::
+
+   **Fetch the year-suffixed PDF, not the "current" one.** As of
+   2026-09 ``.../Forms_library/current/dr15dss.pdf`` still serves the
+   **CY2025** revision (R. 11/24); the live CY2026 table is at
+   ``.../Forms_library/current/dr15dss_26.pdf`` (R. 11/25). An audit
+   that trusts the unsuffixed path silently validates against last
+   year's rates.
+
 Re-verified 2026-07-05 (daily state-tax audit) against the CY2026
 DR-15DSS (R. 11/25): two stale values carried over from the
 2026-05-04 build were corrected -- **Collier** (was 1.000; the
 CY2026 table lists it "None") and **Palm Beach** (was 1.000; the
 CY2026 table shows 0.500 effective Jan 1 2026, the prior 1%
-infrastructure surtax having ended). Both cross-confirmed against
-Avalara + SalesTaxHandbook. No other CY2026 tier-1 drift found.
+infrastructure surtax having ended).
+
+Re-verified 2026-09 (daily state-tax audit) by diffing **all 67
+counties** against the parsed CY2026 DR-15DSS rather than
+spot-checking pinned ZIPs. Exactly one county disagreed:
+**Okeechobee**, which iter-142 had raised 1.0 -> 1.5 on the strength
+of a SalesTaxHandbook figure. Both the CY2026 and CY2025 DOR tables
+list ``Okeechobee 1% Oct 1, 1995  None`` -- a single small county
+surtax with no expiration and no school capital outlay component --
+so the 1.5 was never correct and over-collected 0.5pp. Reverted to
+1.000. The remaining 66 counties match the DOR table exactly.
 
 Architecture: Florida has only TWO modeled layers; there is **no
 city-level general sales tax** anywhere in the state.
@@ -86,7 +105,13 @@ Notable 2026 surtax-rate situations to watch:
   cap and ended -- DR-15DSS lists Collier "None" for 2025 and 2026.
 - **Brevard / Charlotte** -- both 1.0% now but their component
   surtaxes carry Dec 31 2026 expirations; re-check at the CY2027
-  DR-15DSS reissue.
+  DR-15DSS reissue. As of 2026-09 no CY2027 DR-15DSS is published
+  (``dr15dss_27.pdf`` 404s); it normally appears in November. If
+  neither county renews, both drop to **0.0%** (combined 6.0%) on
+  2027-01-01 -- Brevard covers the Palm Bay tier-1 pin.
+- **Okeechobee** -- **1.0%** (small county surtax, Oct 1 1995, no
+  expiration). Do not re-raise this to 1.5% from an aggregator; see
+  the CY2026 re-verification note above.
 
 DISCLAIMER: This is calculation infrastructure, not tax advice.
 Verify every rate against the current FL DOR DR-15DSS publication
@@ -166,8 +191,8 @@ FL_COUNTY_SURTAX_PCT: dict[str, Decimal] = {
     "Nassau County": Decimal("1.000"),  # Local Govt Infrastructure
     "Okaloosa County": Decimal("1.000"),  # 0.5% School + 0.5% Local Govt
     "Okeechobee County": Decimal(
-        "1.500"
-    ),  # iter-142: was 1.0; SalesTaxHandbook 2026 shows 1.5 (Small County Surtax + School Capital Outlay)
+        "1.000"
+    ),  # daily-audit 2026-09: Small County Surtax only -- "Okeechobee 1% Oct 1, 1995  None" in DR-15DSS CY2026 (R.11/25) AND CY2025 (R.11/24). iter-142 raised this 1.0 -> 1.5 citing SalesTaxHandbook, asserting a school capital outlay surtax Okeechobee has never levied; reverted to the DOR value (was over-collecting 0.5pp)
     "Orange County": Decimal("0.500"),  # School Capital Outlay
     "Osceola County": Decimal("1.500"),  # 1% Transportation + 0.5% School
     "Palm Beach County": Decimal(

@@ -45,6 +45,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/src
 
+# Install PostgreSQL client for data restore
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+
 # Non-root user for runtime
 RUN groupadd -r app && useradd -r -g app -m app
 
@@ -60,6 +63,9 @@ COPY --from=builder /build/alembic.ini /app/alembic.ini
 # also "install" the project as a `.pth` so import works whether or
 # not PYTHONPATH is honored by all entrypoints (e.g. alembic env.py).
 RUN echo '/app/src' > /usr/local/lib/python3.11/site-packages/opensalestax-src.pth
+
+# Create data directory and ensure app user can write to it
+RUN mkdir -p /var/lib/opensalestax/data && chown -R app:app /var/lib/opensalestax
 
 USER app
 

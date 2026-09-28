@@ -4,6 +4,7 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+*.iml
 
 # Claude Code session local state
 .claude/
@@ -50,6 +51,7 @@ data/downloads/
 .env.local
 *.local.json
 config.local.*
+db_token.txt
 
 # SonarQube scanner local state
 .scannerwork/

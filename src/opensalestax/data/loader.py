@@ -30,7 +30,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from opensalestax.data.sst import SstFilename, default_data_dir, file_url
@@ -198,6 +198,10 @@ async def load_state_data(
     taxability_loaded = await _load_taxability(session, state_module, state_row.id)
     holidays_loaded = await _load_holidays(session, state_module, state_row.id)
 
+    # Derived coverage counts, refreshed in the same transaction as the data
+    # they describe so the two can never disagree.
+    await refresh_zip5_counts(session, {a.id for a in authority_cache.values()})
+
     await session.commit()
 
     summary = LoadSummary(
@@ -308,6 +312,37 @@ async def _load_rates(
         await session.execute(insert(Rate), buffer)
         buffer.clear()
     return rates_loaded
+
+
+async def refresh_zip5_counts(session: AsyncSession, authority_ids: set[int] | None = None) -> int:
+    """Recompute ``tax_authorities.zip5_count`` from ``boundaries``.
+
+    Called after a data version lands, because that is the only time the
+    underlying boundary rows can change. Pass ``authority_ids`` to limit the
+    work to the authorities a load touched; omit it to rebuild everything
+    (what a restore or a backfill wants).
+
+    Returns the number of authorities written.
+    """
+    counts_stmt = select(Boundary.authority_id, func.count(Boundary.zip5.distinct())).group_by(
+        Boundary.authority_id
+    )
+    if authority_ids:
+        counts_stmt = counts_stmt.where(Boundary.authority_id.in_(authority_ids))
+    counts = dict((await session.execute(counts_stmt)).tuples().all())
+
+    # Authorities the load touched but that ended up with no boundary rows
+    # must be reset to zero, not left carrying a stale count from an earlier
+    # version -- otherwise a shrinking data version silently keeps the old
+    # coverage and the lookup tie-breaks on a number that is no longer true.
+    targets = set(authority_ids) if authority_ids else set(counts)
+    for authority_id in targets:
+        await session.execute(
+            update(TaxAuthority)
+            .where(TaxAuthority.id == authority_id)
+            .values(zip5_count=counts.get(authority_id, 0))
+        )
+    return len(targets)
 
 
 async def _maybe_load_boundaries(

@@ -489,6 +489,7 @@ async def _restore_summary_async(source: str) -> RestoreSummary:
     from sqlalchemy import func, select
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from opensalestax.data.loader import refresh_zip5_counts
     from opensalestax.db.models import Boundary, Rate, State, TaxAuthority
     from opensalestax.db.session import get_engine, reset_engine
 
@@ -496,6 +497,17 @@ async def _restore_summary_async(source: str) -> RestoreSummary:
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:
+            # A dump is data-only, so a COPY produced before tax_authorities
+            # grew zip5_count carries no value for it and every authority
+            # lands on the column default of zero. Nothing upstream catches
+            # that: the schema check passes because our dumps deliberately
+            # exclude alembic_version, and the migration's backfill already
+            # ran before the restore. Zeros would silently skew the
+            # city/county tie-breaks that read this column, so the counts are
+            # rebuilt from the restored boundaries.
+            await refresh_zip5_counts(session)
+            await session.commit()
+
             states = (await session.execute(select(func.count()).select_from(State))).scalar_one()
             rates = (await session.execute(select(func.count()).select_from(Rate))).scalar_one()
             bounds = (

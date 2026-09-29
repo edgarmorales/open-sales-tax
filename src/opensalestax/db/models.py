@@ -161,6 +161,23 @@ class TaxAuthority(Base):
         back_populates="authority", cascade=_CASCADE_ALL_DELETE_ORPHAN
     )
 
+    # Distinct ZIP5s this authority covers, derived from ``boundaries``.
+    #
+    # Denormalised deliberately. The lookup path needs it to break
+    # city/county ties and to spot single-ZIP districts, and computing it
+    # per request meant a ``count(distinct zip5) group by authority_id``
+    # over the whole boundary table -- p50 3,370 ms against 8.86 million rows in
+    # production, on every request that matched an authority, which was
+    # enough on its own to hold the database at 100% CPU.
+    #
+    # It is refreshed by the loader when a data version lands, which is the
+    # only time it can change. Constitution §6 makes a data refresh a
+    # deliberate version-bumping operation, so that is the right moment;
+    # a runtime cache would instead serve counts from one data version
+    # beside rates from another, breaking the §5 guarantee that the same
+    # inputs yield the same output for a given data version.
+    zip5_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
     __table_args__ = (
         UniqueConstraint("state_id", "name", "authority_type", name="uq_authority_identity"),
     )

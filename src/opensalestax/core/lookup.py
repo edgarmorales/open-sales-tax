@@ -327,14 +327,9 @@ async def _dedup_typez_fallback(
     )
     rows = [(row[0], row[1]) for row in (await session.execute(rows_stmt)).all()]
 
-    coverage_stmt = (
-        select(Boundary.authority_id, func.count(Boundary.zip5.distinct()))
-        .where(Boundary.authority_id.in_(candidate_ids))
-        .group_by(Boundary.authority_id)
-    )
-    total_zip_counts: dict[int, int] = {}
-    for aid, zip_count in (await session.execute(coverage_stmt)).all():
-        total_zip_counts[aid] = zip_count
+    # Read off the authority rows we already have rather than aggregating
+    # the boundary table again -- see TaxAuthority.zip5_count.
+    total_zip_counts = {a.id: a.zip5_count for a in authorities}
     return _pick_one_city_county_per_zip5(rows, total_zip_counts=total_zip_counts)
 
 
@@ -411,12 +406,7 @@ async def _dedup_single_local_districts(
         .group_by(Boundary.authority_id)
     )
     zip_counts = dict((await session.execute(zip_count_stmt)).tuples().all())
-    total_stmt = (
-        select(Boundary.authority_id, func.count(Boundary.zip5.distinct()))
-        .where(Boundary.authority_id.in_(district_ids))
-        .group_by(Boundary.authority_id)
-    )
-    total_counts = dict((await session.execute(total_stmt)).tuples().all())
+    total_counts = {d.id: d.zip5_count for d in districts}
 
     return _collapse_single_local_districts(authorities, zip_counts, total_counts, local_state)
 
@@ -476,16 +466,7 @@ async def lookup_jurisdictions_by_zip5_loose(
     # both bind to ZIP 05404 with row count = 1 and the lower-id
     # authority wins arbitrarily; the curated-name tiebreaker doesn't
     # help when both are curated.
-    candidate_ids = {auth.id for auth, _ in rows}
-    total_zip_counts: dict[int, int] = {}
-    if candidate_ids:
-        coverage_stmt = (
-            select(Boundary.authority_id, func.count(Boundary.zip5.distinct()))
-            .where(Boundary.authority_id.in_(candidate_ids))
-            .group_by(Boundary.authority_id)
-        )
-        for aid, zip_count in (await session.execute(coverage_stmt)).all():
-            total_zip_counts[aid] = zip_count
+    total_zip_counts = {auth.id: auth.zip5_count for auth, _ in rows}
 
     picked = _pick_one_city_county_per_zip5(rows, total_zip_counts=total_zip_counts)
     # Collapse multi-county same-rate LOST/overlay stacks (IA) to the

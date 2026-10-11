@@ -350,3 +350,37 @@ def test_route_inventory_covers_every_v1_operation(monkeypatch: pytest.MonkeyPat
         f"  undeclared here : {declared - classified}\n"
         f"  gone from app   : {classified - declared}"
     )
+
+
+def test_rate_limited_endpoints_declare_a_response_parameter() -> None:
+    """slowapi writes X-RateLimit-* onto a `response` parameter.
+
+    With headers_enabled=True it raises if the endpoint has no such
+    parameter -- and the failure is invisible until an authenticated request
+    reaches the body. Not at import, not in a 401, not in a 422. /v1/calculate
+    shipped without one and returned 500 to every valid caller in production.
+
+    The behavioural test above cannot catch this: it tolerates 500s before the
+    threshold, because /v1/calculate and /v1/rates reach for a database that a
+    unit test has not got. That tolerance is exactly what hid this. So the
+    requirement is asserted structurally instead.
+    """
+    import inspect
+
+    from opensalestax.api.v1 import calculate, capabilities, rates, states
+
+    endpoints = {
+        "calculate": calculate.calculate,
+        "capabilities": capabilities.capabilities,
+        "states": states.list_states,
+        "rates": rates.get_rates,
+    }
+
+    missing = [
+        name for name, fn in endpoints.items() if "response" not in inspect.signature(fn).parameters
+    ]
+    assert not missing, (
+        "rate-limited endpoints without a `response` parameter: "
+        f"{missing}. slowapi needs it to attach rate-limit headers; without "
+        "one the route 500s for every request that gets past auth."
+    )

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from opensalestax.api.v1.schemas import (
@@ -38,6 +38,12 @@ AuthDep = Annotated[object, Depends(authenticate)]
 @limiter.limit(default_limit)
 async def calculate(
     request: Request,
+    # Required by slowapi: with headers_enabled=True it writes the
+    # X-RateLimit-* headers onto this parameter, and raises if the endpoint
+    # does not declare one. Omitting it does not fail at import or in a
+    # 401 -- only once an authenticated request reaches the body, which is
+    # how this shipped broken.
+    response: Response,
     body: CalculateRequest,
     session: SessionDep,
     auth: AuthDep,

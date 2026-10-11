@@ -72,13 +72,35 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "If true, the rate-limit key_func reads the real client IP "
-            "from the CF-Connecting-IP header (or first hop of "
-            "X-Forwarded-For), rather than request.client.host. Only "
-            "enable when the API sits behind a trusted proxy (Cloudflare, "
-            "an internal LB) that always sets these headers -- otherwise "
-            "any caller can spoof their IP and bypass rate limiting. "
-            "Off by default; opensalestax.org's Cloudflare-fronted prod "
-            "sets this true."
+            "from the CF-Connecting-IP header (or X-Forwarded-For), "
+            "rather than request.client.host. Only enable when the API "
+            "sits behind a trusted proxy that always sets these headers "
+            "-- otherwise any caller can spoof their IP and bypass rate "
+            "limiting. Off by default; opensalestax.org's "
+            "Cloudflare-fronted prod sets this true. Behind a proxy that "
+            "APPENDS to X-Forwarded-For rather than replacing it (AWS "
+            "ALB, nginx, Traefik), also set trusted_proxy_hops."
+        ),
+    )
+    trusted_proxy_hops: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "How many trusted proxies append to X-Forwarded-For between "
+            "the client and this app. Only consulted when "
+            "trust_forwarded_for is true and CF-Connecting-IP is absent.\n"
+            "\n"
+            "0 (default) keeps the historical behaviour: trust the FIRST "
+            "hop. That is correct for Cloudflare, which replaces the "
+            "header, but WRONG for a proxy that appends -- an AWS ALB "
+            "turns a client-sent 'X-Forwarded-For: 1.2.3.4' into "
+            "'1.2.3.4, <real client>', so the first hop is whatever the "
+            "caller chose and every caller can pick their own rate-limit "
+            "bucket.\n"
+            "\n"
+            "Set it to the number of appending proxies instead: 1 for a "
+            "single ALB, 2 for CDN -> ALB. The IP is then counted from "
+            "the RIGHT, which is the part a caller cannot forge."
         ),
     )
 

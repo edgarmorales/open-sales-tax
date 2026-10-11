@@ -27,6 +27,34 @@ Two modes, switched via env var (`OPENSALESTAX_AUTH_MODE`):
 - **`api_key`:** `X-API-Key` header required on every request.
   Per-key rate limits + usage tracking. Wired up in v0.2.
 
+### Rate limiting behind a reverse proxy
+
+In `open` mode the limit is keyed on the caller's IP, so the engine
+has to be told how to find it. By default it uses the immediate TCP
+peer — correct when the engine is exposed directly, wrong when it is
+not, because every request then appears to come from the proxy and
+the whole world shares one bucket.
+
+Set `OPENSALESTAX_TRUST_FORWARDED_FOR=true` to read the client IP
+from headers instead. Then pick the right one for your proxy:
+
+| In front of the engine | Setting |
+|---|---|
+| Cloudflare | nothing further — `CF-Connecting-IP` is used, and it cannot be spoofed from outside Cloudflare |
+| One proxy that **appends** to `X-Forwarded-For` (AWS ALB, nginx, Traefik) | `OPENSALESTAX_TRUSTED_PROXY_HOPS=1` |
+| CDN in front of such a proxy | `OPENSALESTAX_TRUSTED_PROXY_HOPS=2` |
+
+The hop count matters because appending proxies keep whatever the
+caller sent. A request carrying `X-Forwarded-For: 1.2.3.4` arrives at
+the engine as `1.2.3.4, <real client>`, so trusting the *first* entry
+hands every caller their own rate-limit bucket — worse than no header
+trust at all. The hop count counts from the right instead, which is
+the part a caller cannot forge.
+
+Leaving `OPENSALESTAX_TRUSTED_PROXY_HOPS` at its default of `0` keeps
+the first-hop behaviour, which is correct only for a proxy that
+*replaces* the header.
+
 ## Errors
 
 | HTTP | Meaning |

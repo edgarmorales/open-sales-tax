@@ -127,6 +127,73 @@ def test_client_ip_proxy_aware_falls_back_to_remote_address() -> None:
     assert _client_ip_proxy_aware(req) == "10.32.161.42"
 
 
+def test_xff_first_hop_is_forgeable_behind_an_appending_proxy() -> None:
+    """The bug this parameter exists for.
+
+    An AWS ALB APPENDS the peer it saw, so a caller who sends their own
+    X-Forwarded-For keeps the first hop under their control. With the
+    default hop count we return the forged value -- which is why the
+    default is unsafe behind an ALB and the parameter is needed.
+    """
+    req = _mock_request(
+        headers={"X-Forwarded-For": "1.2.3.4, 198.51.100.10"},
+        client_host="10.0.0.1",
+    )
+    assert _client_ip_proxy_aware(req) == "1.2.3.4"
+
+
+def test_one_trusted_hop_ignores_a_forged_first_hop() -> None:
+    """With one ALB in front, the real client is the LAST entry."""
+    req = _mock_request(
+        headers={"X-Forwarded-For": "1.2.3.4, 198.51.100.10"},
+        client_host="10.0.0.1",
+    )
+    assert _client_ip_proxy_aware(req, trusted_proxy_hops=1) == "198.51.100.10"
+
+
+def test_one_trusted_hop_with_no_forgery() -> None:
+    """The ordinary case: the ALB appended the only entry there is."""
+    req = _mock_request(
+        headers={"X-Forwarded-For": "198.51.100.10"},
+        client_host="10.0.0.1",
+    )
+    assert _client_ip_proxy_aware(req, trusted_proxy_hops=1) == "198.51.100.10"
+
+
+def test_two_trusted_hops_counts_from_the_right() -> None:
+    """CDN -> ALB: the client sits two from the right."""
+    req = _mock_request(
+        headers={"X-Forwarded-For": "1.2.3.4, 198.51.100.10, 172.16.0.9"},
+        client_host="10.0.0.1",
+    )
+    assert _client_ip_proxy_aware(req, trusted_proxy_hops=2) == "198.51.100.10"
+
+
+def test_fewer_hops_than_configured_falls_back_to_peer() -> None:
+    """A short header means the request skipped a proxy we expected.
+
+    Indexing shallower would return exactly the entry a caller forges,
+    so this falls back to the immediate peer instead.
+    """
+    req = _mock_request(
+        headers={"X-Forwarded-For": "1.2.3.4"},
+        client_host="10.32.161.42",
+    )
+    assert _client_ip_proxy_aware(req, trusted_proxy_hops=2) == "10.32.161.42"
+
+
+def test_cf_connecting_ip_still_wins_over_hops() -> None:
+    """Cloudflare deployments are unaffected by the hop count."""
+    req = _mock_request(
+        headers={
+            "CF-Connecting-IP": "203.0.113.5",
+            "X-Forwarded-For": "1.2.3.4, 198.51.100.10",
+        },
+        client_host="10.0.0.1",
+    )
+    assert _client_ip_proxy_aware(req, trusted_proxy_hops=1) == "203.0.113.5"
+
+
 def test_client_ip_proxy_aware_ignores_blank_xff() -> None:
     """A leading-empty X-Forwarded-For falls through to remote address."""
     req = _mock_request(
@@ -153,5 +220,45 @@ def test_rate_limit_keys_per_cf_connecting_ip(monkeypatch: pytest.MonkeyPatch) -
         # Caller B (different real IP) should still have quota despite
         # sharing the same TCP peer (the test client).
         assert c.get("/", headers={"CF-Connecting-IP": "203.0.113.99"}).status_code == 307
+
+    monkeypatch.setattr(settings_module, "_settings", None)
+
+
+def test_rate_limit_keys_per_real_client_behind_an_alb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The end-to-end shape of the ALB fix.
+
+    Two callers sharing one TCP peer (the ALB) get separate buckets,
+    and a caller who forges a first hop cannot escape their own bucket
+    by varying it -- which is what makes the limit meaningful behind a
+    proxy that appends rather than replaces.
+    """
+    monkeypatch.setenv("OPENSALESTAX_DATABASE_URL", "postgresql+asyncpg://u:p@localhost:5432/db")
+    monkeypatch.setenv("OPENSALESTAX_RATE_LIMIT_PER_MINUTE", "2")
+    monkeypatch.setenv("OPENSALESTAX_TRUST_FORWARDED_FOR", "true")
+    monkeypatch.setenv("OPENSALESTAX_TRUSTED_PROXY_HOPS", "1")
+    monkeypatch.setattr(settings_module, "_settings", None)
+
+    app = create_app()
+    with TestClient(app, follow_redirects=False) as c:
+        # Caller A burns its quota. The ALB appended its IP last.
+        for _ in range(2):
+            assert c.get("/", headers={"X-Forwarded-For": "198.51.100.10"}).status_code == 307
+        assert c.get("/", headers={"X-Forwarded-For": "198.51.100.10"}).status_code == 429
+
+        # Same caller, now forging a different first hop. Under the old
+        # first-hop behaviour this bought a fresh bucket; counting from
+        # the right, it is still caller A and still spent.
+        assert (
+            c.get(
+                "/",
+                headers={"X-Forwarded-For": "1.2.3.4, 198.51.100.10"},
+            ).status_code
+            == 429
+        )
+
+        # A genuinely different client still has its own quota.
+        assert c.get("/", headers={"X-Forwarded-For": "198.51.100.77"}).status_code == 307
 
     monkeypatch.setattr(settings_module, "_settings", None)

@@ -60,14 +60,29 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def _client_ip_proxy_aware(request: StarletteRequest) -> str:
+def _client_ip_proxy_aware(request: StarletteRequest, trusted_proxy_hops: int = 0) -> str:
     """Return the real client IP, preferring proxy-injected headers.
 
     Cloudflare-fronted prod sees ``request.client.host`` as the CF
     edge IP, which rotates across requests and would split each user's
     quota across many edges. ``CF-Connecting-IP`` (Cloudflare-set,
-    unspoofable from outside CF) and the first hop of
-    ``X-Forwarded-For`` carry the real client IP.
+    unspoofable from outside CF) carries the real client IP.
+
+    Without that header we fall back to ``X-Forwarded-For``, and which
+    END of it to trust depends on the proxy in front:
+
+    * A proxy that **replaces** the header (Cloudflare) leaves exactly
+      one trustworthy value, so the first hop is right. This is the
+      default (``trusted_proxy_hops = 0``) and the historical
+      behaviour.
+    * A proxy that **appends** (AWS ALB, nginx, Traefik) adds the peer
+      it saw to the END. A caller who sends their own
+      ``X-Forwarded-For: 1.2.3.4`` gets ``1.2.3.4, <real client>``, so
+      the first hop is attacker-chosen and every caller could pick
+      their own rate-limit bucket. Set ``trusted_proxy_hops`` to the
+      number of appending proxies (1 for a single ALB) and the IP is
+      counted from the RIGHT instead -- the part a caller cannot forge,
+      because each proxy appends after whatever it was given.
 
     Only invoked when ``OPENSALESTAX_TRUST_FORWARDED_FOR=true``.
     Trusting these headers without a proxy in front lets any caller
@@ -79,6 +94,16 @@ def _client_ip_proxy_aware(request: StarletteRequest) -> str:
         return cf
     xff = request.headers.get("X-Forwarded-For")
     if xff:
+        hops = trusted_proxy_hops
+        if hops:
+            parts = [part.strip() for part in xff.split(",")]
+            # Too few entries means the request did not traverse the
+            # proxies we were told to expect. Rather than guess at a
+            # shallower index -- which is exactly the value a caller
+            # would forge -- fall back to the immediate peer.
+            if len(parts) >= hops and parts[-hops]:
+                return parts[-hops]
+            return get_remote_address(request)
         first_hop = xff.split(",", 1)[0].strip()
         if first_hop:
             return first_hop
@@ -99,7 +124,14 @@ def create_app() -> FastAPI:
     by overriding settings before calling ``create_app``.
     """
     settings = get_settings()
-    key_func = _client_ip_proxy_aware if settings.trust_forwarded_for else get_remote_address
+
+    # The hop count is bound once here rather than read per request: the
+    # key_func is on the hot path, and keeping it free of settings lookups
+    # also keeps it unit-testable without a configured environment.
+    def _keyed_by_real_client_ip(request: StarletteRequest) -> str:
+        return _client_ip_proxy_aware(request, settings.trusted_proxy_hops)
+
+    key_func = _keyed_by_real_client_ip if settings.trust_forwarded_for else get_remote_address
     limiter = Limiter(
         key_func=key_func,
         default_limits=[f"{settings.rate_limit_per_minute}/minute"],

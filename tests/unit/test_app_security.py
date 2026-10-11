@@ -262,3 +262,91 @@ def test_rate_limit_keys_per_real_client_behind_an_alb(
         assert c.get("/", headers={"X-Forwarded-For": "198.51.100.77"}).status_code == 307
 
     monkeypatch.setattr(settings_module, "_settings", None)
+
+
+# --- every v1 route is limited -------------------------------------------
+#
+# The bug this guards against: FastAPI 0.138 stopped flattening
+# include_router into individual APIRoutes, so SlowAPIMiddleware could no
+# longer find a handler for any /v1 path and silently skipped the check. The
+# whole API served unlimited while the suite stayed green, because the only
+# rate-limit test hit "/" -- a route declared directly on the app, and the one
+# route still covered.
+#
+# So these assert on the real surface, and the inventory test below makes a
+# newly added route fail until someone decides which list it belongs in.
+
+# Requests must be VALID. The decorator wraps the endpoint, so FastAPI
+# resolves dependencies and validates the body FIRST -- a malformed request
+# 422s before the limiter is ever consulted.
+_RATE_LIMITED: list[tuple[str, str, dict]] = [
+    ("GET", "/v1/capabilities", {}),
+    ("GET", "/v1/states", {}),
+    ("GET", "/v1/rates", {"params": {"zip5": "10001"}}),
+    (
+        "POST",
+        "/v1/calculate",
+        {
+            "json": {
+                "address": {"zip5": "10001"},
+                "line_items": [{"id": "i", "amount": "1.00", "quantity": 1}],
+                "shipping": {"amount": "0.00", "separately_stated": True},
+            }
+        },
+    ),
+]
+
+# Monitors must be able to poll liveness without consuming quota.
+_EXEMPT: list[tuple[str, str]] = [("GET", "/v1/health")]
+
+
+def _app_with_limit(monkeypatch: pytest.MonkeyPatch, limit: int):
+    monkeypatch.setenv("OPENSALESTAX_DATABASE_URL", "postgresql+asyncpg://u:p@localhost:5432/db")
+    monkeypatch.setenv("OPENSALESTAX_RATE_LIMIT_PER_MINUTE", str(limit))
+    monkeypatch.setattr(settings_module, "_settings", None)
+    return create_app()
+
+
+@pytest.mark.parametrize(("method", "path", "kwargs"), _RATE_LIMITED)
+def test_v1_route_is_rate_limited(
+    method: str, path: str, kwargs: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past the threshold the route must refuse, whatever it returns below it.
+
+    Earlier responses may be 500s here -- /v1/rates and /v1/calculate reach
+    for a database this unit test has not got. That is fine and deliberate:
+    the limiter runs in the decorator, ahead of the endpoint body, so the
+    429 arrives without the route ever touching the database.
+    """
+    app = _app_with_limit(monkeypatch, 2)
+    with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as c:
+        codes = [c.request(method, path, **kwargs).status_code for _ in range(4)]
+    assert codes[-1] == 429, f"{method} {path} never refused: {codes}"
+
+
+@pytest.mark.parametrize(("method", "path"), _EXEMPT)
+def test_v1_route_is_exempt(method: str, path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exempt routes must keep answering well past the threshold."""
+    app = _app_with_limit(monkeypatch, 2)
+    with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as c:
+        codes = [c.request(method, path).status_code for _ in range(6)]
+    assert 429 not in codes, f"{method} {path} was throttled: {codes}"
+
+
+def test_route_inventory_covers_every_v1_operation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A new v1 route must be classified, not silently unprotected.
+
+    Without this, adding a route is enough to reopen the original hole: it
+    would simply not be covered by any test and nobody would notice.
+    """
+    app = _app_with_limit(monkeypatch, 60)
+    declared = {
+        (method.upper(), path) for path, ops in app.openapi()["paths"].items() for method in ops
+    }
+    classified = {(m, p) for m, p, _ in _RATE_LIMITED} | set(_EXEMPT)
+    assert declared == classified, (
+        "v1 route inventory is out of date. Add the new route to _RATE_LIMITED, "
+        "or to _EXEMPT with a reason.\n"
+        f"  undeclared here : {declared - classified}\n"
+        f"  gone from app   : {classified - declared}"
+    )

@@ -27,6 +27,22 @@ Two modes, switched via env var (`OPENSALESTAX_AUTH_MODE`):
 - **`api_key`:** `X-API-Key` header required on every request.
   Per-key rate limits + usage tracking. Wired up in v0.2.
 
+### What is and is not limited
+
+Every `/v1` endpoint is rate-limited except **`GET /v1/health`**, which is
+deliberately exempt so monitors can poll liveness without consuming quota.
+
+Two properties worth knowing:
+
+* **Invalid requests are not counted.** The limit is enforced on the endpoint,
+  and FastAPI validates the request before calling it — so a malformed body
+  returns `422` without touching the limiter. Malformed floods are cheap for
+  the server (nothing reaches the database) but they are not throttled.
+* **Limits are per process.** Counters live in memory, so a deployment running
+  N replicas permits roughly N times the configured rate. Single-task
+  deployments are unaffected; if you scale out and need a hard ceiling, point
+  slowapi at shared storage.
+
 ### Rate limiting behind a reverse proxy
 
 In `open` mode the limit is keyed on the caller's IP, so the engine

@@ -93,3 +93,20 @@ async def async_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 def database_available() -> bool:
     """Return True if a database URL is configured."""
     return _has_database_url()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Clear rate-limit counters between tests.
+
+    The limiter is module-level (``opensalestax.ratelimit``) because
+    ``@limiter.limit`` decorators bind at import time. That means its
+    in-memory counters outlive a single ``create_app()``, so without this a
+    test that exhausts the limit leaves the next one pre-throttled -- which
+    showed up as three tests passing alone and failing in the suite.
+    """
+    from opensalestax.ratelimit import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()

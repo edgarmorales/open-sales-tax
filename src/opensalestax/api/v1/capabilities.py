@@ -12,10 +12,11 @@ Driver: connector-tier captain's ``engine-team-requests.md``
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 
 from opensalestax import __version__
 from opensalestax.api.v1.schemas import CapabilitiesResponse, EndpointDescriptor
+from opensalestax.ratelimit import default_limit, limiter
 
 router = APIRouter(tags=["capabilities"])
 
@@ -64,7 +65,8 @@ _FEATURES: dict[str, bool] = {
 
 
 @router.get("/capabilities")
-async def capabilities(response: Response) -> CapabilitiesResponse:
+@limiter.limit(default_limit)
+async def capabilities(request: Request, response: Response) -> CapabilitiesResponse:
     """Return the engine's feature manifest.
 
     Static per release; can be cached aggressively by the connector

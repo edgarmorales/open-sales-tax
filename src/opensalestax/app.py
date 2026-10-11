@@ -19,17 +19,15 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
 
 # Import for side-effect: triggers state-module registration.
 import opensalestax.states  # noqa: F401
 from opensalestax import __version__
 from opensalestax.api.v1 import router as v1_router
+from opensalestax.ratelimit import client_ip_from_headers, limiter
 from opensalestax.settings import get_settings
 
 # Defense-in-depth response headers. JSON-only API; no CSP because the
@@ -60,54 +58,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def _client_ip_proxy_aware(request: StarletteRequest, trusted_proxy_hops: int = 0) -> str:
-    """Return the real client IP, preferring proxy-injected headers.
-
-    Cloudflare-fronted prod sees ``request.client.host`` as the CF
-    edge IP, which rotates across requests and would split each user's
-    quota across many edges. ``CF-Connecting-IP`` (Cloudflare-set,
-    unspoofable from outside CF) carries the real client IP.
-
-    Without that header we fall back to ``X-Forwarded-For``, and which
-    END of it to trust depends on the proxy in front:
-
-    * A proxy that **replaces** the header (Cloudflare) leaves exactly
-      one trustworthy value, so the first hop is right. This is the
-      default (``trusted_proxy_hops = 0``) and the historical
-      behaviour.
-    * A proxy that **appends** (AWS ALB, nginx, Traefik) adds the peer
-      it saw to the END. A caller who sends their own
-      ``X-Forwarded-For: 1.2.3.4`` gets ``1.2.3.4, <real client>``, so
-      the first hop is attacker-chosen and every caller could pick
-      their own rate-limit bucket. Set ``trusted_proxy_hops`` to the
-      number of appending proxies (1 for a single ALB) and the IP is
-      counted from the RIGHT instead -- the part a caller cannot forge,
-      because each proxy appends after whatever it was given.
-
-    Only invoked when ``OPENSALESTAX_TRUST_FORWARDED_FOR=true``.
-    Trusting these headers without a proxy in front lets any caller
-    pick their own rate-limit bucket, so the default is to use the
-    immediate peer (``get_remote_address``).
-    """
-    cf = request.headers.get("CF-Connecting-IP")
-    if cf:
-        return cf
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        hops = trusted_proxy_hops
-        if hops:
-            parts = [part.strip() for part in xff.split(",")]
-            # Too few entries means the request did not traverse the
-            # proxies we were told to expect. Rather than guess at a
-            # shallower index -- which is exactly the value a caller
-            # would forge -- fall back to the immediate peer.
-            if len(parts) >= hops and parts[-hops]:
-                return parts[-hops]
-            return get_remote_address(request)
-        first_hop = xff.split(",", 1)[0].strip()
-        if first_hop:
-            return first_hop
-    return get_remote_address(request)
+# Kept under its original name: it was importable from here before the
+# limiter moved to its own module, and that import is used by tests.
+_client_ip_proxy_aware = client_ip_from_headers
 
 
 def create_app() -> FastAPI:
@@ -118,30 +71,14 @@ def create_app() -> FastAPI:
     auth dispatch) can branch on settings without re-import side
     effects.
 
-    Rate limiting (per constitution sec 6 / spec sec 6): the app
-    installs a slowapi limiter scoped per-IP at the configured
-    requests/minute (default 60). Tests can override the limiter
-    by overriding settings before calling ``create_app``.
+    Rate limiting (per constitution sec 6 / spec sec 6): the limiter
+    itself lives in ``opensalestax.ratelimit`` and is module-level,
+    because the ``@limiter.limit`` decorators on the v1 routes bind at
+    import time. ``SlowAPIMiddleware`` stays attached below so routes
+    declared directly on the app -- which carry no decorator -- are
+    still covered.
     """
     settings = get_settings()
-
-    # The hop count is bound once here rather than read per request: the
-    # key_func is on the hot path, and keeping it free of settings lookups
-    # also keeps it unit-testable without a configured environment.
-    def _keyed_by_real_client_ip(request: StarletteRequest) -> str:
-        return _client_ip_proxy_aware(request, settings.trusted_proxy_hops)
-
-    key_func = _keyed_by_real_client_ip if settings.trust_forwarded_for else get_remote_address
-    limiter = Limiter(
-        key_func=key_func,
-        default_limits=[f"{settings.rate_limit_per_minute}/minute"],
-        # Surface X-RateLimit-Limit / X-RateLimit-Remaining /
-        # X-RateLimit-Reset on every response so clients can pace
-        # themselves without probing for 429s. Standard pattern across
-        # GitHub, Stripe, Twilio, etc. The 429 path already sets
-        # Retry-After in our custom handler below.
-        headers_enabled=True,
-    )
 
     app = FastAPI(
         title="OpenSalesTax",

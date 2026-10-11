@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 
 from opensalestax.api.v1.schemas import StateInfo, StatesResponse
+from opensalestax.ratelimit import default_limit, limiter
 from opensalestax.states.catalog import STATE_CATALOG
 from opensalestax.states.registry import get_state_module
 
@@ -14,7 +15,8 @@ router = APIRouter(tags=["states"])
 
 
 @router.get("/states")
-async def list_states(response: Response) -> StatesResponse:
+@limiter.limit(default_limit)
+async def list_states(request: Request, response: Response) -> StatesResponse:
     """List every US tax jurisdiction with its coverage tier.
 
     Tier semantics (also in StateInfo schema):

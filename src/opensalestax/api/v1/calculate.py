@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from opensalestax.api.v1.schemas import (
@@ -20,6 +20,7 @@ from opensalestax.auth import authenticate
 from opensalestax.core.calculate import LineItem, ShippingRequest, calculate_tax
 from opensalestax.core.coverage import coverage_warning_for_states
 from opensalestax.db.session import get_session
+from opensalestax.ratelimit import default_limit, limiter
 
 router = APIRouter(tags=["calculate"])
 
@@ -34,7 +35,9 @@ AuthDep = Annotated[object, Depends(authenticate)]
         401: {"description": "Missing or invalid X-API-Key (api_key auth mode only)."},
     },
 )
+@limiter.limit(default_limit)
 async def calculate(
+    request: Request,
     body: CalculateRequest,
     session: SessionDep,
     auth: AuthDep,

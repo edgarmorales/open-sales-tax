@@ -8,7 +8,7 @@ import datetime as dt
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from opensalestax.api.v1.schemas import JurisdictionRate, RatesResponse
@@ -21,6 +21,7 @@ from opensalestax.core.lookup import (
 )
 from opensalestax.core.resolve import combined_rate_pct, resolve_rates_for_authorities
 from opensalestax.db.session import get_session
+from opensalestax.ratelimit import default_limit, limiter
 
 router = APIRouter(tags=["rates"])
 
@@ -40,7 +41,9 @@ Zip4Q = Annotated[
         401: {"description": "Missing or invalid X-API-Key (api_key auth mode only)."},
     },
 )
+@limiter.limit(default_limit)
 async def get_rates(
+    request: Request,
     zip5: Zip5Q,
     session: SessionDep,
     auth: AuthDep,

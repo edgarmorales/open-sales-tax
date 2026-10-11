@@ -77,6 +77,12 @@ variables. Set them in a `.env` file at the repo root before
 OPENSALESTAX_DATABASE_URL=postgresql+asyncpg://user:pass@some-host:5432/db
 OPENSALESTAX_RATE_LIMIT_PER_MINUTE=120
 OPENSALESTAX_LOG_LEVEL=DEBUG
+
+# Behind a load balancer? Rate limiting needs to know how to find the
+# real client IP, or every request looks like it came from the proxy.
+# See "Rate limiting behind a reverse proxy" in docs/api.md.
+OPENSALESTAX_TRUST_FORWARDED_FOR=true
+OPENSALESTAX_TRUSTED_PROXY_HOPS=1
 ```
 
 ## 6. Tear down
